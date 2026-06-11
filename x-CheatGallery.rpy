@@ -243,10 +243,11 @@ init 999 python:
             words = s.replace('_', ' ').split()
             return ' '.join(w.capitalize() for w in words)
 
-        # 辅助：生成一个条目行
+        # 辅助：生成一个条目行（不使用 f-string）
         def make_entry(display_name, file_metas):
             paths = [m['path'] for m in file_metas]
-            return f'    ("{display_name}", ["' + '", "'.join(paths) + '"]),'
+            # 拼接字符串：'    ("%s", ["%s"]),' % (display_name, '", "'.join(paths))
+            return '    ("%s", ["%s"]),' % (display_name, '", "'.join(paths))
 
         # 处理正常父组
         for parent in sorted(regular_parents.keys()):
@@ -256,15 +257,15 @@ init 999 python:
             for _, sg in sub_items:
                 all_files.extend(sg)
             parent_display = parent.capitalize()
-            lines.append(f"\n# [{parent_display}]")
+            lines.append("\n# [%s]" % parent_display)
             # All 条目
-            lines.append(make_entry(f"{parent_display} All", all_files))
+            lines.append(make_entry("%s All" % parent_display, all_files))
             # 各子组条目
             for gname, sg in sub_items:
                 display = format_display(gname)
                 # 如果子组名与父组名完全相同，添加 "Group" 后缀避免重复
                 if display.lower() == parent_display.lower():
-                    display = f"{display} Group"
+                    display = "%s Group" % display
                 lines.append(make_entry(display, sg))
 
         # 处理 Others_ 组
@@ -286,7 +287,7 @@ init 999 python:
                     no_ext = os.path.splitext(fp)[0]
                     bn = os.path.basename(no_ext)
                     display = format_display(bn)
-                    lines.append(f'#    ("{display}", ["{no_ext}"]),')
+                    lines.append('#    ("%s", ["%s"]),' % (display, no_ext))
 
         return '\n'.join(lines)
 
@@ -361,9 +362,12 @@ init 999 python:
                 if isinstance(item, tuple) and len(item) == 2:
                     display, files = item
                     is_group = len(files) > 1
+                    # 显示时加上数量，但不在 f-string 里处理
+                    if is_group:
+                        display = display + "  (%d)" % len(files)
                     result.append({
                         'type': 'item',
-                        'display': display + (f"  ({len(files)})" if is_group else ""),
+                        'display': display,
                         'files': list(files),
                         'is_group': is_group,
                     })
@@ -497,7 +501,8 @@ screen gallery_list():
 
     $ char_count = len([g for g in g_gallery_groups if g['type'] == 'header'])
     $ item_count = len([g for g in g_gallery_groups if g['type'] == 'item'])
-    text f"{char_count} 角色, {item_count} 条目":
+    # 不使用 f-string，改用字符串拼接
+    text str(char_count) + " 角色, " + str(item_count) + " 条目":
         xalign 0.5 yalign 0.98
         size 14
         color "#7f8c8d"
@@ -559,7 +564,8 @@ screen gallery_player():
                         size 24
                         color "#ffffff"
 
-                text f"{current_num} / {total_num}":
+                # 不使用 f-string
+                text str(current_num) + " / " + str(total_num):
                     size 20
                     color "#ffffff"
                     yalign 0.5
