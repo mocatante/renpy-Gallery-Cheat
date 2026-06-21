@@ -8,6 +8,7 @@
 init 999 python:
     import os
     import re
+    import io
     from collections import defaultdict
 
     # -------------------- 配置 --------------------
@@ -303,7 +304,7 @@ init 999 python:
         old_content = None
         if os.path.exists(txt_path):
             try:
-                with open(txt_path, 'r', encoding='utf-8') as f:
+                with io.open(txt_path, 'r', encoding='utf-8') as f:
                     old_content = f.read()
             except:
                 pass
@@ -314,7 +315,7 @@ init 999 python:
         if not current_videos:
             return txt_path
 
-        with open(txt_path, 'w', encoding='utf-8') as f:
+        with io.open(txt_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
         return txt_path
 
@@ -331,7 +332,7 @@ init 999 python:
         content = None
         for p in paths:
             try:
-                with open(p, 'r', encoding='utf-8') as f:
+                with io.open(p, 'r', encoding='utf-8') as f:
                     content = f.read()
                 break
             except:
