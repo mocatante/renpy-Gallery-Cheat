@@ -4,6 +4,7 @@
 #  生成类似"有分隔符分组效果.txt"的分组结构
 #  排序规则：先按原始文件名（含数字），再按去除数字后的文件名
 # ============================================================
+
 init -999:
     transform gallery_movie_fit:
         size (1920, 1080)
@@ -20,6 +21,8 @@ init 999 python:
     GALLERY_CONFIG = {
         # 视频文件扩展名
         'video_exts': ['.webm', '.mp4', '.avi', '.ogv', '.mkv'],
+        # 图片文件扩展名
+        'image_exts': ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tga'],
         # 输出文件路径（相对于 game 目录）
         'output_file': 'gallery_movies.txt',
         # LCP 相似度阈值（0~1），本算法已改用固定最小公共前缀长度3，此参数暂未使用，保留兼容
@@ -37,6 +40,35 @@ init 999 python:
     g_gallery_current_index = 0
     g_gallery_show_button = True
     g_gallery_file_cache = {}
+    g_gallery_photo_cache = []
+
+    # -------------------- 配置解析 --------------------
+    def _gallery_parse_config(content):
+        lines = content.strip().split('\n')
+        enable = 1
+        size = 900
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped.startswith('#'):
+                break
+            cfg = stripped[1:].strip()
+            if '=' in cfg:
+                eq_pos = cfg.find('=')
+                key = cfg[:eq_pos].strip().lower()
+                value = cfg[eq_pos + 1:].strip()
+                if key == 'enable':
+                    try:
+                        enable = int(value)
+                    except:
+                        enable = 0
+                elif key == 'size':
+                    try:
+                        size = int(value)
+                    except:
+                        size = 900
+
+        return (enable, size)
 
     # -------------------- 文件解析（保持不变）--------------------
     def _gallery_resolve_file(name):
@@ -80,6 +112,36 @@ init 999 python:
         g_gallery_file_cache[name] = ('missing', None)
         return g_gallery_file_cache[name]
 
+    # -------------------- 获取文件大小 --------------------
+    def _get_file_size(file_path):
+        try:
+            fobj = renpy.file(file_path)
+            try:
+                fobj.seek(0, 2)
+                size = fobj.tell()
+                fobj.seek(0)
+                return size
+            except:
+                data = fobj.read()
+                return len(data)
+        except:
+            pass
+
+        try:
+            full_path = os.path.join(renpy.config.gamedir, file_path)
+            if os.path.exists(full_path):
+                return os.path.getsize(full_path)
+        except:
+            pass
+
+        try:
+            if os.path.exists(file_path):
+                return os.path.getsize(file_path)
+        except:
+            pass
+
+        return -1
+
     # -------------------- 扫描视频文件 --------------------
     def _gallery_scan_videos():
         """扫描 game 目录下所有视频文件，返回完整路径列表"""
@@ -93,6 +155,29 @@ init 999 python:
         except:
             pass
         return sorted(list(set(videos)))
+
+    # -------------------- 扫描图片文件 --------------------
+    def _gallery_scan_images(size_kb):
+        cfg = GALLERY_CONFIG
+        image_exts = tuple(e.lower() for e in cfg['image_exts'])
+        images = []
+        seen_sizes = {}
+        min_size = size_kb * 1024
+
+        try:
+            for f in renpy.list_files():
+                if f.lower().endswith(image_exts):
+                    fsize = _get_file_size(f)
+                    if fsize < min_size:
+                        continue
+                    if fsize in seen_sizes:
+                        continue
+                    seen_sizes[fsize] = f
+                    images.append(f)
+        except:
+            pass
+
+        return images
 
     # -------------------- 前缀过滤辅助 --------------------
     def _file_matches_prefix(file_path, prefixes):
@@ -299,36 +384,46 @@ init 999 python:
 
         return '\n'.join(lines)
 
-    # -------------------- 生成/读取分组文件 --------------------
-    def _gallery_ensure_txt():
-        """确保 gallery_movies.txt 存在且内容最新，返回文件路径"""
+    # -------------------- 生成 txt --------------------
+    def _gallery_generate_txt(enable, size):
         base_dir = os.environ.get('ANDROID_PUBLIC', renpy.config.gamedir) if renpy.android else renpy.config.gamedir
         txt_path = os.path.join(base_dir, GALLERY_CONFIG['output_file'])
 
-        current_videos = _gallery_scan_videos()
-        new_content = _auto_group(current_videos)
+        videos = _gallery_scan_videos()
+        video_content = _auto_group(videos)
 
-        old_content = None
-        if os.path.exists(txt_path):
-            try:
-                with io.open(txt_path, 'r', encoding='utf-8') as f:
-                    old_content = f.read()
-            except:
-                pass
-
-        if old_content == new_content:
-            return txt_path
-
-        if not current_videos:
-            return txt_path
+        config_header = "# enable = %s\n# size = %s\n" % (enable, size)
+        new_content = config_header + video_content
 
         with io.open(txt_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
+
         return txt_path
 
+    # -------------------- 启动时初始化 --------------------
+    def _gallery_init():
+        global g_gallery_photo_cache
+
+        base_dir = os.environ.get('ANDROID_PUBLIC', renpy.config.gamedir) if renpy.android else renpy.config.gamedir
+        txt_path = os.path.join(base_dir, GALLERY_CONFIG['output_file'])
+
+        if os.path.exists(txt_path):
+            try:
+                with io.open(txt_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                enable, size = _gallery_parse_config(content)
+                if enable == 1:
+                    g_gallery_photo_cache = _gallery_scan_images(size)
+            except:
+                pass
+        else:
+            _gallery_generate_txt(1, 900)
+            g_gallery_photo_cache = _gallery_scan_images(900)
+
+    # -------------------- 加载菜单数据 --------------------
     def _gallery_load():
-        """加载分组文件，解析为内部数据结构"""
-        txt_path = _gallery_ensure_txt()
+        base_dir = os.environ.get('ANDROID_PUBLIC', renpy.config.gamedir) if renpy.android else renpy.config.gamedir
+        txt_path = os.path.join(base_dir, GALLERY_CONFIG['output_file'])
         paths = [
             txt_path,
             os.path.join(renpy.config.gamedir, GALLERY_CONFIG['output_file']),
@@ -348,10 +443,14 @@ init 999 python:
         if not content:
             return []
 
+        enable, size = _gallery_parse_config(content)
+
         result = []
         for line in content.strip().split('\n'):
             line = line.strip()
             if not line:
+                continue
+            if line.startswith('# enable') or line.startswith('# size'):
                 continue
             if line.startswith('#'):
                 if line.startswith('# [') and line.endswith(']'):
@@ -370,7 +469,6 @@ init 999 python:
                 if isinstance(item, tuple) and len(item) == 2:
                     display, files = item
                     is_group = len(files) > 1
-                    # 显示时加上数量，但不在 f-string 里处理
                     if is_group:
                         display = display + "  (%d)" % len(files)
                     result.append({
@@ -381,6 +479,21 @@ init 999 python:
                     })
             except:
                 pass
+
+        if enable == 1 and g_gallery_photo_cache:
+            result.append({
+                'type': 'header',
+                'display': 'Photoes_',
+                'files': [],
+                'is_group': False,
+            })
+            result.append({
+                'type': 'item',
+                'display': 'Photoes_ All  (%d)' % len(g_gallery_photo_cache),
+                'files': g_gallery_photo_cache,
+                'is_group': True,
+            })
+
         return result
 
     # -------------------- UI 控制 --------------------
@@ -428,6 +541,9 @@ init 999 python:
         config.always_shown_screens.append("gallery_float_button")
     except:
         pass
+
+    # ==================== 启动时执行 ====================
+    _gallery_init()
 
 # ============================================================
 #  Screen - 悬浮按钮
@@ -526,7 +642,7 @@ screen gallery_list():
         color "#7f8c8d"
 
 # ============================================================
-#  Screen - 视频播放器
+#  Screen - 视频/图片播放器
 # ============================================================
 screen gallery_player():
     zorder 300
@@ -543,6 +659,8 @@ screen gallery_player():
         if current_file:
             source, obj = _gallery_resolve_file(current_file)
             if source in ('movie_obj', 'rpa_movie'):
+                g_gallery_current_what = obj
+            elif source == 'image':
                 g_gallery_current_what = obj
 
     add g_gallery_current_what at gallery_movie_fit
