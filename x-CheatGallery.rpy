@@ -18,6 +18,13 @@ default g_gallery_show_button = True
 default g_gallery_file_cache = {}
 
 init -2 python:
+    # 预注册 movie channel，解决旧版 Ren'Py "Can't register channel outside of init phase" 错误
+    # Movie() 在 runtime 创建时需要 channel，channel 只能在 init 阶段注册
+    try:
+        renpy.audio.music.register_channel("gallery_movie", renpy.config.movie_mixer, loop=True, stop_on_mute=False, movie=True)
+    except:
+        pass
+
     # 通用注册方案：用 interact_callbacks 在每次交互时主动 show_screen
     # 不依赖 overlay_screens 机制，不受 suppress_overlay 影响
     # 能在所有 Ren'Py 版本的主菜单/游戏内/游戏菜单都显示入口
@@ -84,7 +91,7 @@ init 999 python:
         for ext in cfg['video_exts']:
             test_path = name + ext
             if renpy.loadable(test_path):
-                movie = Movie(play=test_path, size=(1920, 1080))
+                movie = Movie(play=test_path, size=(1920, 1080), channel="gallery_movie")
                 g_gallery_file_cache[name] = ('rpa_movie', movie)
                 return g_gallery_file_cache[name]
 
@@ -106,7 +113,7 @@ init 999 python:
             for prefix in cfg.get('video_prefixes', []):
                 test_path = prefix + name + ext
                 if renpy.loadable(test_path):
-                    movie = Movie(play=test_path, size=(1920, 1080))
+                    movie = Movie(play=test_path, size=(1920, 1080), channel="gallery_movie")
                     g_gallery_file_cache[name] = ('rpa_movie', movie)
                     return g_gallery_file_cache[name]
 
