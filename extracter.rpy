@@ -1,6 +1,8 @@
 # ============================================================
 #  extracter.rpy - 资源导出脚本（兼容 Python 2/3）
-#  自动运行：首次生成 export.ini，之后根据 ini 导出
+#  自动运行：首次生成 export.ini，之后根据 ini 导出到 exported/
+#  导出结构：exported/audios/ 和 exported/videos/ 平坦放置
+#  重名处理：自动加 [n] 后缀
 # ============================================================
 
 init 999 python:
@@ -13,6 +15,8 @@ init 999 python:
     VIDEO_EXTS = ('.webm', '.mp4', '.avi', '.ogv', '.mkv')
     INI_NAME = 'export.ini'
     EXPORT_DIR_NAME = 'exported'
+    AUDIO_DIR_NAME = 'audios'
+    VIDEO_DIR_NAME = 'videos'
 
     # -------------------- 辅助函数 --------------------
     def _get_gamedir():
@@ -24,25 +28,74 @@ init 999 python:
     def _get_export_dir():
         return os.path.join(_get_gamedir(), EXPORT_DIR_NAME)
 
-    def _get_display_name(file_path):
-        bn = os.path.basename(file_path)
-        no_ext = os.path.splitext(bn)[0]
-        return no_ext
+    def _get_audio_export_dir():
+        return os.path.join(_get_export_dir(), AUDIO_DIR_NAME)
 
-    # -------------------- 扫描文件 --------------------
+    def _get_video_export_dir():
+        return os.path.join(_get_export_dir(), VIDEO_DIR_NAME)
+
+    def _get_basename(file_path):
+        return os.path.basename(file_path)
+
+    # -------------------- 获取文件大小 --------------------
+    def _get_file_size(file_path):
+        try:
+            fobj = renpy.file(file_path)
+            try:
+                fobj.seek(0, 2)
+                size = fobj.tell()
+                fobj.seek(0)
+                return size
+            except:
+                data = fobj.read()
+                return len(data)
+        except:
+            pass
+
+        try:
+            full_path = os.path.join(_get_gamedir(), file_path)
+            if os.path.exists(full_path):
+                return os.path.getsize(full_path)
+        except:
+            pass
+
+        try:
+            if os.path.exists(file_path):
+                return os.path.getsize(file_path)
+        except:
+            pass
+
+        return -1
+
+    # -------------------- 扫描文件（带大小去重）--------------------
     def _scan_files():
         audio_files = []
         video_files = []
+        seen_sizes = {}
+
         try:
-            for f in renpy.list_files():
-                lower_f = f.lower()
-                if lower_f.endswith(AUDIO_EXTS):
-                    audio_files.append(f)
-                elif lower_f.endswith(VIDEO_EXTS):
-                    video_files.append(f)
+            all_files = renpy.list_files()
         except:
-            pass
-        return (sorted(list(set(audio_files))), sorted(list(set(video_files))))
+            all_files = []
+
+        for f in all_files:
+            lower_f = f.lower()
+            is_audio = lower_f.endswith(AUDIO_EXTS)
+            is_video = lower_f.endswith(VIDEO_EXTS)
+            if not (is_audio or is_video):
+                continue
+
+            size = _get_file_size(f)
+            if size in seen_sizes:
+                continue
+            seen_sizes[size] = f
+
+            if is_audio:
+                audio_files.append(f)
+            else:
+                video_files.append(f)
+
+        return (sorted(audio_files), sorted(video_files))
 
     # -------------------- 生成 ini --------------------
     def _generate_ini(audio_files, video_files):
@@ -51,6 +104,7 @@ init 999 python:
         lines = []
         lines.append("; 资源导出配置")
         lines.append("; 将需要导出的条目改为 1，或 [all] 改为 1 导出全部")
+        lines.append("; 条目名为完整相对路径（去重后）")
         lines.append("")
         lines.append("[all]")
         lines.append("audio = 0")
@@ -58,17 +112,16 @@ init 999 python:
         lines.append("")
         lines.append("[音频]")
         for f in audio_files:
-            lines.append("%s = 0" % _get_display_name(f))
+            lines.append("%s = 0" % f)
         lines.append("")
         lines.append("[视频]")
         for f in video_files:
-            lines.append("%s = 0" % _get_display_name(f))
+            lines.append("%s = 0" % f)
         lines.append("")
 
         content = "\n".join(lines)
 
         try:
-            # Python 2/3 兼容写文件
             f = open(ini_path, 'wb')
             if sys.version_info[0] >= 3:
                 f.write(content.encode('utf-8'))
@@ -76,7 +129,7 @@ init 999 python:
                 f.write(content)
             f.close()
             return True
-        except Exception as e:
+        except:
             return False
 
     # -------------------- 读取 ini --------------------
@@ -93,7 +146,6 @@ init 999 python:
         current_section = None
 
         try:
-            # Python 2/3 兼容读文件
             f = open(ini_path, 'rb')
             raw = f.read()
             f.close()
@@ -129,14 +181,13 @@ init 999 python:
 
         return result
 
-    # -------------------- 导出文件 --------------------
+    # -------------------- 复制文件 --------------------
     def _copy_file(src_path, dst_path):
         try:
             dst_dir = os.path.dirname(dst_path)
             if not os.path.exists(dst_dir):
                 os.makedirs(dst_dir)
 
-            # 尝试 renpy 读取（支持 RPA）
             try:
                 data = renpy.file(src_path).read()
                 f = open(dst_path, 'wb')
@@ -146,7 +197,6 @@ init 999 python:
             except:
                 pass
 
-            # 回退物理文件
             if os.path.exists(src_path):
                 shutil.copy2(src_path, dst_path)
                 return True
@@ -160,42 +210,56 @@ init 999 python:
         except:
             return False
 
+    # -------------------- 获取唯一文件名（重名加 [n]）--------------------
+    def _get_unique_path(base_dir, filename):
+        """
+        生成不重复的目标路径，重名时加 [1], [2]...
+        例如：test.ogg -> test[1].ogg, test[2].ogg
+        """
+        dst_path = os.path.join(base_dir, filename)
+        if not os.path.exists(dst_path):
+            return dst_path
+
+        # 分离文件名和扩展名
+        name, ext = os.path.splitext(filename)
+        n = 1
+        while True:
+            new_name = "%s[%d]%s" % (name, n, ext)
+            dst_path = os.path.join(base_dir, new_name)
+            if not os.path.exists(dst_path):
+                return dst_path
+            n += 1
+
     # -------------------- 执行导出 --------------------
     def _do_export(audio_files, video_files, ini_data):
-        export_dir = _get_export_dir()
         export_all_audio = (ini_data['all'].get('audio', '0') == '1')
         export_all_video = (ini_data['all'].get('video', '0') == '1')
 
         audio_map = ini_data.get('音频', {})
         video_map = ini_data.get('视频', {})
 
-        exported = 0
+        audio_export_dir = _get_audio_export_dir()
+        video_export_dir = _get_video_export_dir()
 
         for f in audio_files:
-            display = _get_display_name(f)
-            if export_all_audio or audio_map.get(display, '0') == '1':
-                dst = os.path.join(export_dir, f)
-                if _copy_file(f, dst):
-                    exported += 1
+            if export_all_audio or audio_map.get(f, '0') == '1':
+                basename = _get_basename(f)
+                dst = _get_unique_path(audio_export_dir, basename)
+                _copy_file(f, dst)
 
         for f in video_files:
-            display = _get_display_name(f)
-            if export_all_video or video_map.get(display, '0') == '1':
-                dst = os.path.join(export_dir, f)
-                if _copy_file(f, dst):
-                    exported += 1
+            if export_all_video or video_map.get(f, '0') == '1':
+                basename = _get_basename(f)
+                dst = _get_unique_path(video_export_dir, basename)
+                _copy_file(f, dst)
 
-        return exported
-
-    # ==================== 主程序：自动执行 ====================
+    # ==================== 自动执行 ====================
     _audio_files, _video_files = _scan_files()
     _ini_path = _get_ini_path()
 
     if not os.path.exists(_ini_path):
-        # 首次运行：生成 ini
         _generate_ini(_audio_files, _video_files)
     else:
-        # 非首次：读取 ini 并导出
         _ini_data = _read_ini()
         if _ini_data is not None:
             _do_export(_audio_files, _video_files, _ini_data)
