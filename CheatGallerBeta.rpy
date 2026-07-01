@@ -11,6 +11,46 @@ init -999:
         xalign 0.5
         yalign 0.5
 
+# 独立的早期注册块：确保即使主 init 块失败，入口仍能显示
+# 用 default 声明状态变量，保证 screen 求值时一定存在
+default g_gallery_show_button = True
+default g_gallery_groups = []
+default g_gallery_current_group = None
+default g_gallery_current_index = 0
+default g_gallery_file_cache = {}
+# 注意：g_gallery_photo_cache 不用 default，因为 default 会在"新游戏"时重置为 []，
+# 覆盖 _gallery_init() 在 init 阶段扫描的结果。改用 init python 普通变量。
+
+init -2 python:
+    # 通用注册方案：用 interact_callbacks 在每次交互时主动 show_screen
+    # 不依赖 overlay_screens 机制，不受 suppress_overlay 影响
+    # 能在所有 Ren'Py 版本的主菜单/游戏内/游戏菜单都显示入口
+    def _gallery_ensure_float_button():
+        try:
+            if renpy.get_screen("gallery_float_button") is None:
+                renpy.show_screen("gallery_float_button")
+        except:
+            pass
+
+    try:
+        if _gallery_ensure_float_button not in config.interact_callbacks:
+            config.interact_callbacks.append(_gallery_ensure_float_button)
+    except:
+        pass
+
+    # 兼容新版 Ren'Py：同时注册 overlay_screens / always_shown_screens（若有）
+    # 新版 always_shown_screens 不受 suppress_overlay 影响，优先级更高
+    try:
+        if "gallery_float_button" not in config.overlay_screens:
+            config.overlay_screens.append("gallery_float_button")
+    except:
+        pass
+    try:
+        if "gallery_float_button" not in config.always_shown_screens:
+            config.always_shown_screens.append("gallery_float_button")
+    except:
+        pass
+
 init 999 python:
     import os
     import re
@@ -35,11 +75,8 @@ init 999 python:
     }
 
     # -------------------- 全局状态 --------------------
-    g_gallery_groups = []
-    g_gallery_current_group = None
-    g_gallery_current_index = 0
-    g_gallery_show_button = True
-    g_gallery_file_cache = {}
+    # g_gallery_photo_cache 必须用普通变量（不能用 default），否则"新游戏"时会被重置
+    # 其他 UI 状态变量已通过文件顶部的 default 语句声明
     g_gallery_photo_cache = []
 
     # -------------------- 配置解析 --------------------
@@ -537,10 +574,8 @@ init 999 python:
         renpy.restart_interaction()
 
     # 将悬浮按钮设为始终显示
-    try:
-        config.always_shown_screens.append("gallery_float_button")
-    except:
-        pass
+    # 注意：注册逻辑已移至文件顶部的 init -2 python: 块，确保独立执行
+    # 旧版 Ren'Py 只有 config.overlay_screens，没有 config.always_shown_screens
 
     # ==================== 启动时执行 ====================
     _gallery_init()

@@ -10,6 +10,43 @@ init -999:
         xalign 0.5
         yalign 0.5
 
+# 状态变量用 default 声明，确保 screen 求值时一定存在
+default g_gallery_groups = []
+default g_gallery_current_group = None
+default g_gallery_current_index = 0
+default g_gallery_show_button = True
+default g_gallery_file_cache = {}
+
+init -2 python:
+    # 通用注册方案：用 interact_callbacks 在每次交互时主动 show_screen
+    # 不依赖 overlay_screens 机制，不受 suppress_overlay 影响
+    # 能在所有 Ren'Py 版本的主菜单/游戏内/游戏菜单都显示入口
+    # 兼容 Py2/Py3：仅用 def/try/except/list.append/is None，无 f-string 等新语法
+    def _gallery_ensure_float_button():
+        try:
+            if renpy.get_screen("gallery_float_button") is None:
+                renpy.show_screen("gallery_float_button")
+        except:
+            pass
+
+    try:
+        if _gallery_ensure_float_button not in config.interact_callbacks:
+            config.interact_callbacks.append(_gallery_ensure_float_button)
+    except:
+        pass
+
+    # 兼容新版 Ren'Py：同时注册 overlay_screens / always_shown_screens（若有）
+    try:
+        if "gallery_float_button" not in config.overlay_screens:
+            config.overlay_screens.append("gallery_float_button")
+    except:
+        pass
+    try:
+        if "gallery_float_button" not in config.always_shown_screens:
+            config.always_shown_screens.append("gallery_float_button")
+    except:
+        pass
+
 init 999 python:
     import os
     import re
@@ -32,11 +69,7 @@ init 999 python:
     }
 
     # -------------------- 全局状态 --------------------
-    g_gallery_groups = []
-    g_gallery_current_group = None
-    g_gallery_current_index = 0
-    g_gallery_show_button = True
-    g_gallery_file_cache = {}
+    # 状态变量已通过文件顶部的 default 语句声明，这里不再重复赋值
 
     # -------------------- 文件解析（保持不变）--------------------
     def _gallery_resolve_file(name):
@@ -423,11 +456,7 @@ init 999 python:
         g_gallery_current_index = (g_gallery_current_index - 1) % len(files)
         renpy.restart_interaction()
 
-    # 将悬浮按钮设为始终显示
-    try:
-        config.always_shown_screens.append("gallery_float_button")
-    except:
-        pass
+    # 注册逻辑已移至文件顶部的 init -2 python: 块
 
 # ============================================================
 #  Screen - 悬浮按钮

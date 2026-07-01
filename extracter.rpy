@@ -1,8 +1,8 @@
 # ============================================================
 #  extracter.rpy - 资源导出脚本（兼容 Python 2/3）
 #  自动运行：首次生成 export.ini，之后根据 ini 导出到 exported/
-#  导出结构：exported/audios/ 和 exported/videos/ 平坦放置
-#  重名处理：自动加 [n] 后缀
+#  导出结构：exported/audios/ exported/videos/ exported/images/ 平坦放置
+#  图片：ini 不列条目，[all] 下 image + lowestSize(KB) 控制
 # ============================================================
 
 init 999 python:
@@ -13,10 +13,12 @@ init 999 python:
     # -------------------- 配置 --------------------
     AUDIO_EXTS = ('.mp3', '.ogg', '.wav', '.opus', '.flac', '.wma')
     VIDEO_EXTS = ('.webm', '.mp4', '.avi', '.ogv', '.mkv')
+    IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tga')
     INI_NAME = 'export.ini'
     EXPORT_DIR_NAME = 'exported'
     AUDIO_DIR_NAME = 'audios'
     VIDEO_DIR_NAME = 'videos'
+    IMAGE_DIR_NAME = 'images'
 
     # -------------------- 辅助函数 --------------------
     def _get_gamedir():
@@ -33,6 +35,9 @@ init 999 python:
 
     def _get_video_export_dir():
         return os.path.join(_get_export_dir(), VIDEO_DIR_NAME)
+
+    def _get_image_export_dir():
+        return os.path.join(_get_export_dir(), IMAGE_DIR_NAME)
 
     def _get_basename(file_path):
         return os.path.basename(file_path)
@@ -67,10 +72,11 @@ init 999 python:
 
         return -1
 
-    # -------------------- 扫描文件（带大小去重）--------------------
+    # -------------------- 扫描文件 --------------------
     def _scan_files():
         audio_files = []
         video_files = []
+        image_files = []
         seen_sizes = {}
 
         try:
@@ -82,7 +88,8 @@ init 999 python:
             lower_f = f.lower()
             is_audio = lower_f.endswith(AUDIO_EXTS)
             is_video = lower_f.endswith(VIDEO_EXTS)
-            if not (is_audio or is_video):
+            is_image = lower_f.endswith(IMAGE_EXTS)
+            if not (is_audio or is_video or is_image):
                 continue
 
             size = _get_file_size(f)
@@ -92,23 +99,27 @@ init 999 python:
 
             if is_audio:
                 audio_files.append(f)
-            else:
+            elif is_video:
                 video_files.append(f)
+            else:
+                image_files.append(f)
 
-        return (sorted(audio_files), sorted(video_files))
+        return (sorted(audio_files), sorted(video_files), sorted(image_files))
 
     # -------------------- 生成 ini --------------------
-    def _generate_ini(audio_files, video_files):
+    def _generate_ini(audio_files, video_files, image_files):
         ini_path = _get_ini_path()
 
         lines = []
         lines.append("; 资源导出配置")
         lines.append("; 将需要导出的条目改为 1，或 [all] 改为 1 导出全部")
-        lines.append("; 条目名为完整相对路径（去重后）")
+        lines.append("; lowestSize: 图片最小文件大小（KB），0 表示全部导出")
         lines.append("")
         lines.append("[all]")
         lines.append("audio = 0")
         lines.append("video = 0")
+        lines.append("image = 0")
+        lines.append("lowestSize = 0")
         lines.append("")
         lines.append("[音频]")
         for f in audio_files:
@@ -139,7 +150,7 @@ init 999 python:
             return None
 
         result = {
-            'all': {'audio': '0', 'video': '0'},
+            'all': {'audio': '0', 'video': '0', 'image': '0', 'lowestSize': '0'},
             '音频': {},
             '视频': {},
         }
@@ -171,7 +182,7 @@ init 999 python:
                     value = line[eq_pos + 1:].strip()
 
                     if current_section == 'all':
-                        if key in ('audio', 'video'):
+                        if key in ('audio', 'video', 'image', 'lowestSize'):
                             result['all'][key] = value
                     else:
                         result[current_section][key] = value
@@ -212,15 +223,10 @@ init 999 python:
 
     # -------------------- 获取唯一文件名（重名加 [n]）--------------------
     def _get_unique_path(base_dir, filename):
-        """
-        生成不重复的目标路径，重名时加 [1], [2]...
-        例如：test.ogg -> test[1].ogg, test[2].ogg
-        """
         dst_path = os.path.join(base_dir, filename)
         if not os.path.exists(dst_path):
             return dst_path
 
-        # 分离文件名和扩展名
         name, ext = os.path.splitext(filename)
         n = 1
         while True:
@@ -231,15 +237,25 @@ init 999 python:
             n += 1
 
     # -------------------- 执行导出 --------------------
-    def _do_export(audio_files, video_files, ini_data):
+    def _do_export(audio_files, video_files, image_files, ini_data):
         export_all_audio = (ini_data['all'].get('audio', '0') == '1')
         export_all_video = (ini_data['all'].get('video', '0') == '1')
+        export_all_image = (ini_data['all'].get('image', '0') == '1')
+
+        try:
+            lowest_size_kb = int(ini_data['all'].get('lowestSize', '0'))
+        except:
+            lowest_size_kb = 0
+
+        # KB 转字节
+        lowest_size = lowest_size_kb * 1024
 
         audio_map = ini_data.get('音频', {})
         video_map = ini_data.get('视频', {})
 
         audio_export_dir = _get_audio_export_dir()
         video_export_dir = _get_video_export_dir()
+        image_export_dir = _get_image_export_dir()
 
         for f in audio_files:
             if export_all_audio or audio_map.get(f, '0') == '1':
@@ -253,13 +269,22 @@ init 999 python:
                 dst = _get_unique_path(video_export_dir, basename)
                 _copy_file(f, dst)
 
+        for f in image_files:
+            size = _get_file_size(f)
+            if size < lowest_size:
+                continue
+            if export_all_image:
+                basename = _get_basename(f)
+                dst = _get_unique_path(image_export_dir, basename)
+                _copy_file(f, dst)
+
     # ==================== 自动执行 ====================
-    _audio_files, _video_files = _scan_files()
+    _audio_files, _video_files, _image_files = _scan_files()
     _ini_path = _get_ini_path()
 
     if not os.path.exists(_ini_path):
-        _generate_ini(_audio_files, _video_files)
+        _generate_ini(_audio_files, _video_files, _image_files)
     else:
         _ini_data = _read_ini()
         if _ini_data is not None:
-            _do_export(_audio_files, _video_files, _ini_data)
+            _do_export(_audio_files, _video_files, _image_files, _ini_data)
