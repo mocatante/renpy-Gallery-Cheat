@@ -204,24 +204,32 @@ init 999 python:
     def _gallery_scan_images(size_kb):
         cfg = GALLERY_CONFIG
         image_exts = tuple(e.lower() for e in cfg['image_exts'])
-        images = []
-        seen_sizes = {}
         min_size = size_kb * 1024
 
-        try:
-            for f in renpy.list_files():
-                if f.lower().endswith(image_exts):
-                    fsize = _get_file_size(f)
-                    if fsize < min_size:
-                        continue
-                    if fsize in seen_sizes:
-                        continue
-                    seen_sizes[fsize] = f
-                    images.append(f)
-        except:
-            pass
+        # 第一步：收集所有符合条件的图片（路径 + 大小）
+        candidates = []
+        for f in renpy.list_files():
+            if f.lower().endswith(image_exts):
+                fsize = _get_file_size(f)
+                if fsize >= min_size or fsize == -1:   # -1 视为未知，也保留
+                    candidates.append((f, fsize))
 
-        return images
+        # 第二步：按 basename 分组
+        groups = {}
+        for f, size in candidates:
+            base = os.path.basename(f)
+            groups.setdefault(base, []).append((f, size))
+
+        # 第三步：每组内按大小去重（大小相同只保留第一个）
+        result = []
+        for base, items in groups.items():
+            seen_sizes = set()
+            for f, size in items:
+                if size not in seen_sizes:
+                    seen_sizes.add(size)
+                    result.append(f)
+
+        return sorted(result)
 
     # -------------------- 前缀过滤辅助 --------------------
     def _file_matches_prefix(file_path, prefixes):

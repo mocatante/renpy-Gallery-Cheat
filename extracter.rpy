@@ -1,8 +1,10 @@
 # ============================================================
-#  extracter.rpy - 资源导出脚本（兼容 Python 2/3）
+#  extracter.rpy - 资源导出脚本（重构版，兼容 Python 2/3）
 #  自动运行：首次生成 export.ini，之后根据 ini 导出到 exported/
 #  导出结构：exported/audios/ exported/videos/ exported/images/ 平坦放置
-#  图片：ini 不列条目，[all] 下 image + lowestSize(KB) 控制
+#  文件名去重：ini 只列文件名（无路径），同名不同路径合并为一个条目
+#  去重选项：deduplicate = 1 时同名文件按大小去重（仅当大小相同）
+#  图片控制：由 [all] 中的 image 开关和 lowestSize（KB）统一控制，不列出具体文件
 # ============================================================
 
 init 999 python:
@@ -10,7 +12,7 @@ init 999 python:
     import sys
     import shutil
 
-    # -------------------- 配置 --------------------
+    # -------------------- 配置常量 --------------------
     AUDIO_EXTS = ('.mp3', '.ogg', '.wav', '.opus', '.flac', '.wma')
     VIDEO_EXTS = ('.webm', '.mp4', '.avi', '.ogv', '.mkv')
     IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tga')
@@ -20,7 +22,7 @@ init 999 python:
     VIDEO_DIR_NAME = 'videos'
     IMAGE_DIR_NAME = 'images'
 
-    # -------------------- 辅助函数 --------------------
+    # -------------------- 路径辅助函数 --------------------
     def _get_gamedir():
         return renpy.config.gamedir
 
@@ -39,11 +41,9 @@ init 999 python:
     def _get_image_export_dir():
         return os.path.join(_get_export_dir(), IMAGE_DIR_NAME)
 
-    def _get_basename(file_path):
-        return os.path.basename(file_path)
-
-    # -------------------- 获取文件大小 --------------------
+    # -------------------- 获取文件大小（加强健壮性）--------------------
     def _get_file_size(file_path):
+        # 尝试通过 renpy.file 读取
         try:
             fobj = renpy.file(file_path)
             try:
@@ -57,6 +57,7 @@ init 999 python:
         except:
             pass
 
+        # 尝试从磁盘读取（拼接 gamedir）
         try:
             full_path = os.path.join(_get_gamedir(), file_path)
             if os.path.exists(full_path):
@@ -64,21 +65,32 @@ init 999 python:
         except:
             pass
 
+        # 尝试直接作为路径
         try:
             if os.path.exists(file_path):
                 return os.path.getsize(file_path)
         except:
             pass
 
-        return -1
+        # 最后尝试直接用 open 读取（可能用于绝对路径）
+        try:
+            with open(file_path, 'rb') as f:
+                f.seek(0, 2)
+                return f.tell()
+        except:
+            return -1   # 实在无法获取，返回 -1
 
-    # -------------------- 扫描文件 --------------------
-    def _scan_files():
-        audio_files = []
-        video_files = []
-        image_files = []
-        seen_sizes = {}
-
+    # -------------------- 扫描文件（按类型和文件名分组）--------------------
+    def _scan_files_grouped():
+        """
+        返回结构：
+        {
+            'audio': { 'basename1': [{'path':..., 'size':...}, ...], ... },
+            'video': { ... },
+            'image': { ... }
+        }
+        """
+        groups = {'audio': {}, 'video': {}, 'image': {}}
         try:
             all_files = renpy.list_files()
         except:
@@ -86,34 +98,32 @@ init 999 python:
 
         for f in all_files:
             lower_f = f.lower()
-            is_audio = lower_f.endswith(AUDIO_EXTS)
-            is_video = lower_f.endswith(VIDEO_EXTS)
-            is_image = lower_f.endswith(IMAGE_EXTS)
-            if not (is_audio or is_video or is_image):
+            if lower_f.endswith(AUDIO_EXTS):
+                typ = 'audio'
+            elif lower_f.endswith(VIDEO_EXTS):
+                typ = 'video'
+            elif lower_f.endswith(IMAGE_EXTS):
+                typ = 'image'
+            else:
                 continue
 
             size = _get_file_size(f)
-            if size in seen_sizes:
-                continue
-            seen_sizes[size] = f
+            base = os.path.basename(f)
+            groups[typ].setdefault(base, []).append({'path': f, 'size': size})
 
-            if is_audio:
-                audio_files.append(f)
-            elif is_video:
-                video_files.append(f)
-            else:
-                image_files.append(f)
+        return groups
 
-        return (sorted(audio_files), sorted(video_files), sorted(image_files))
-
-    # -------------------- 生成 ini --------------------
-    def _generate_ini(audio_files, video_files, image_files):
+    # -------------------- 生成 ini（只包含音频和视频文件名，不列出图片）--------------------
+    def _generate_ini(groups):
         ini_path = _get_ini_path()
-
         lines = []
-        lines.append("; 资源导出配置")
-        lines.append("; 将需要导出的条目改为 1，或 [all] 改为 1 导出全部")
-        lines.append("; lowestSize: 图片最小文件大小（KB），0 表示全部导出")
+        lines.append("; 资源导出配置（重构版）")
+        lines.append("; deduplicate = 1 表示同名文件按大小去重，仅当大小相同才合并，否则用 [n] 区分")
+        lines.append("; 设置为 0 则全部导出，同名文件自动加 [n]")
+        lines.append("; [all] 下为全局开关：audio/video/image 控制是否导出该类，lowestSize 为图片最小大小（KB）")
+        lines.append("; 音频和视频可在各自 section 中单独开关，图片不列具体文件，由 image 和 lowestSize 统一控制")
+        lines.append("")
+        lines.append("deduplicate = 1")
         lines.append("")
         lines.append("[all]")
         lines.append("audio = 0")
@@ -121,17 +131,15 @@ init 999 python:
         lines.append("image = 0")
         lines.append("lowestSize = 0")
         lines.append("")
-        lines.append("[音频]")
-        for f in audio_files:
-            lines.append("%s = 0" % f)
-        lines.append("")
-        lines.append("[视频]")
-        for f in video_files:
-            lines.append("%s = 0" % f)
-        lines.append("")
+        # 只写入音频和视频 section，不写入图像
+        for section_name, typ in [("音频", "audio"), ("视频", "video")]:
+            lines.append("[%s]" % section_name)
+            for base in sorted(groups[typ].keys()):
+                lines.append("%s = 0" % base)
+            lines.append("")
+        # 图像 section 不写入，符合要求
 
         content = "\n".join(lines)
-
         try:
             f = open(ini_path, 'wb')
             if sys.version_info[0] >= 3:
@@ -143,85 +151,90 @@ init 999 python:
         except:
             return False
 
-    # -------------------- 读取 ini --------------------
+    # -------------------- 读取 ini（解析全局键和节）--------------------
     def _read_ini():
         ini_path = _get_ini_path()
         if not os.path.exists(ini_path):
             return None
 
         result = {
+            'global': {'deduplicate': '1'},   # 默认值
             'all': {'audio': '0', 'video': '0', 'image': '0', 'lowestSize': '0'},
             '音频': {},
             '视频': {},
+            # 没有 '图像' 键，因为不列出图片
         }
-        current_section = None
+        current = None
 
         try:
             f = open(ini_path, 'rb')
             raw = f.read()
             f.close()
-
             if sys.version_info[0] >= 3:
                 text = raw.decode('utf-8')
             else:
                 text = raw
-
-            for line in text.split('\n'):
-                line = line.strip()
-                if not line or line.startswith(';') or line.startswith('#'):
-                    continue
-
-                if line.startswith('[') and line.endswith(']'):
-                    section_name = line[1:-1]
-                    current_section = section_name if section_name in result else None
-                    continue
-
-                if '=' in line and current_section is not None:
-                    eq_pos = line.find('=')
-                    key = line[:eq_pos].strip()
-                    value = line[eq_pos + 1:].strip()
-
-                    if current_section == 'all':
-                        if key in ('audio', 'video', 'image', 'lowestSize'):
-                            result['all'][key] = value
-                    else:
-                        result[current_section][key] = value
-
         except:
             return None
 
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line or line.startswith(';') or line.startswith('#'):
+                continue
+
+            if line.startswith('[') and line.endswith(']'):
+                section = line[1:-1]
+                # 只有已知的节才设置，图像节忽略（但我们不期望存在）
+                if section in result:
+                    current = section
+                else:
+                    current = None   # 忽略未知节
+                continue
+
+            if '=' in line:
+                key, val = line.split('=', 1)
+                key, val = key.strip(), val.strip()
+                if current is None:
+                    # 全局键
+                    result['global'][key] = val
+                else:
+                    # 当前节下的键
+                    result[current][key] = val
+
         return result
 
-    # -------------------- 复制文件 --------------------
+    # -------------------- 拷贝文件（从 renpy 资源或磁盘）--------------------
     def _copy_file(src_path, dst_path):
         try:
             dst_dir = os.path.dirname(dst_path)
             if not os.path.exists(dst_dir):
                 os.makedirs(dst_dir)
 
+            # 尝试 renpy.file
             try:
                 data = renpy.file(src_path).read()
-                f = open(dst_path, 'wb')
-                f.write(data)
-                f.close()
+                with open(dst_path, 'wb') as f:
+                    f.write(data)
                 return True
             except:
                 pass
 
-            if os.path.exists(src_path):
-                shutil.copy2(src_path, dst_path)
-                return True
-
+            # 尝试从磁盘（gamedir 下）
             game_path = os.path.join(_get_gamedir(), src_path)
             if os.path.exists(game_path):
                 shutil.copy2(game_path, dst_path)
+                return True
+
+            # 尝试直接作为路径
+            if os.path.exists(src_path):
+                shutil.copy2(src_path, dst_path)
                 return True
 
             return False
         except:
             return False
 
-    # -------------------- 获取唯一文件名（重名加 [n]）--------------------
+    # -------------------- 获取唯一目标路径（自动添加 [n]）--------------------
     def _get_unique_path(base_dir, filename):
         dst_path = os.path.join(base_dir, filename)
         if not os.path.exists(dst_path):
@@ -236,55 +249,83 @@ init 999 python:
                 return dst_path
             n += 1
 
-    # -------------------- 执行导出 --------------------
-    def _do_export(audio_files, video_files, image_files, ini_data):
-        export_all_audio = (ini_data['all'].get('audio', '0') == '1')
-        export_all_video = (ini_data['all'].get('video', '0') == '1')
-        export_all_image = (ini_data['all'].get('image', '0') == '1')
+    # -------------------- 执行导出（根据 ini 配置）--------------------
+    def _do_export(groups, ini_data):
+        # 读取全局去重开关
+        deduplicate = ini_data['global'].get('deduplicate', '1') == '1'
 
+        # 读取 all 开关
+        all_audio = ini_data['all'].get('audio', '0') == '1'
+        all_video = ini_data['all'].get('video', '0') == '1'
+        all_image = ini_data['all'].get('image', '0') == '1'
+        # 读取图片最低大小（KB）
         try:
             lowest_size_kb = int(ini_data['all'].get('lowestSize', '0'))
         except:
             lowest_size_kb = 0
+        lowest_size = lowest_size_kb * 1024  # 转字节
 
-        # KB 转字节
-        lowest_size = lowest_size_kb * 1024
+        # 定义类型处理顺序（图片单独处理）
+        # 音频和视频支持具体条目
+        type_configs = [
+            ('audio', '音频', all_audio, _get_audio_export_dir()),
+            ('video', '视频', all_video, _get_video_export_dir()),
+        ]
 
-        audio_map = ini_data.get('音频', {})
-        video_map = ini_data.get('视频', {})
+        for typ, section_name, all_flag, export_dir in type_configs:
+            section = ini_data.get(section_name, {})
+            for base, records in groups[typ].items():
+                # 判断是否导出：all 开关或具体条目为 1
+                if not (all_flag or section.get(base, '0') == '1'):
+                    continue
 
-        audio_export_dir = _get_audio_export_dir()
-        video_export_dir = _get_video_export_dir()
-        image_export_dir = _get_image_export_dir()
+                # 去重筛选
+                if deduplicate:
+                    size_map = {}
+                    for rec in records:
+                        key = rec['size']
+                        size_map.setdefault(key, []).append(rec)
+                    final_records = [group[0] for group in size_map.values()]
+                else:
+                    final_records = records
 
-        for f in audio_files:
-            if export_all_audio or audio_map.get(f, '0') == '1':
-                basename = _get_basename(f)
-                dst = _get_unique_path(audio_export_dir, basename)
-                _copy_file(f, dst)
+                for rec in final_records:
+                    dst = _get_unique_path(export_dir, base)
+                    _copy_file(rec['path'], dst)
 
-        for f in video_files:
-            if export_all_video or video_map.get(f, '0') == '1':
-                basename = _get_basename(f)
-                dst = _get_unique_path(video_export_dir, basename)
-                _copy_file(f, dst)
+        # ----- 处理图片（不读取具体条目，只受 all_image 和 lowestSize 控制）-----
+        if all_image:
+            image_export_dir = _get_image_export_dir()
+            for base, records in groups['image'].items():
+                # 按大小过滤
+                filtered_records = []
+                for rec in records:
+                    if rec['size'] >= lowest_size or rec['size'] == -1:  # -1 表示未知，默认导出
+                        filtered_records.append(rec)
+                if not filtered_records:
+                    continue
 
-        for f in image_files:
-            size = _get_file_size(f)
-            if size < lowest_size:
-                continue
-            if export_all_image:
-                basename = _get_basename(f)
-                dst = _get_unique_path(image_export_dir, basename)
-                _copy_file(f, dst)
+                # 去重筛选
+                if deduplicate:
+                    size_map = {}
+                    for rec in filtered_records:
+                        key = rec['size']
+                        size_map.setdefault(key, []).append(rec)
+                    final_records = [group[0] for group in size_map.values()]
+                else:
+                    final_records = filtered_records
+
+                for rec in final_records:
+                    dst = _get_unique_path(image_export_dir, base)
+                    _copy_file(rec['path'], dst)
 
     # ==================== 自动执行 ====================
-    _audio_files, _video_files, _image_files = _scan_files()
-    _ini_path = _get_ini_path()
+    groups = _scan_files_grouped()
+    ini_path = _get_ini_path()
 
-    if not os.path.exists(_ini_path):
-        _generate_ini(_audio_files, _video_files, _image_files)
+    if not os.path.exists(ini_path):
+        _generate_ini(groups)
     else:
-        _ini_data = _read_ini()
-        if _ini_data is not None:
-            _do_export(_audio_files, _video_files, _image_files, _ini_data)
+        ini_data = _read_ini()
+        if ini_data is not None:
+            _do_export(groups, ini_data)
