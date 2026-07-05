@@ -16,3 +16,5 @@ but using a size limit in "gallery_movies.txt" to filter images
 so it not available in android.and photoes bring delay, 
 so i dont add to x-CheatGallery.rpy
 which i want longly steady in android.
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mocatante/renpy-Gallery-Cheat)
